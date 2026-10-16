@@ -51,7 +51,8 @@ class TaskRepository:
                     assigned_agent_id TEXT,
                     result TEXT,
                     error TEXT,
-                    history_json TEXT NOT NULL
+                    history_json TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS execution_events (
@@ -70,14 +71,22 @@ class TaskRepository:
                 ON execution_events(task_id, occurred_at);
             """)
 
+            # Migration for existing databases
+            try:
+                self._connection.execute("SELECT version FROM tasks LIMIT 1")
+            except sqlite3.OperationalError:
+                self._connection.execute(
+                    "ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 0"
+                )
+
     def create_task(self, task: Task) -> None:
         with self._connection:
             self._connection.execute(
                 """
                 INSERT INTO tasks (
                     task_id, description, status, created_at, updated_at,
-                    assigned_agent_id, result, error, history_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    assigned_agent_id, result, error, history_json, version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.task_id,
@@ -89,6 +98,7 @@ class TaskRepository:
                     task.result,
                     task.error,
                     json.dumps(task.history),
+                    task.version,
                 ),
             )
 
@@ -110,6 +120,7 @@ class TaskRepository:
         task.result = row["result"]
         task.error = row["error"]
         task.history = json.loads(row["history_json"])
+        task.version = row["version"]
         return task
 
     def update_task(self, task: Task) -> None:
@@ -123,8 +134,9 @@ class TaskRepository:
                     assigned_agent_id = ?,
                     result = ?,
                     error = ?,
-                    history_json = ?
-                WHERE task_id = ?
+                    history_json = ?,
+                    version = version + 1
+                WHERE task_id = ? AND version = ?
                 """,
                 (
                     task.description,
@@ -135,11 +147,22 @@ class TaskRepository:
                     task.error,
                     json.dumps(task.history),
                     task.task_id,
+                    task.version,
                 ),
             )
 
             if cursor.rowcount != 1:
+                # Check if it was deleted or updated
+                exists = self._connection.execute(
+                    "SELECT 1 FROM tasks WHERE task_id = ?", (task.task_id,)
+                ).fetchone()
+                if exists:
+                    raise ConcurrentTaskUpdateError(
+                        f"Task {task.task_id} was updated by another process."
+                    )
                 raise KeyError(f"Task not found: {task.task_id}")
+
+            task.version += 1
 
     def record_event(self, event: ExecutionEvent) -> None:
         with self._connection:
@@ -198,8 +221,8 @@ class TaskRepository:
                 """
                 INSERT INTO tasks (
                     task_id, description, status, created_at, updated_at,
-                    assigned_agent_id, result, error, history_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    assigned_agent_id, result, error, history_json, version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.task_id,
@@ -211,6 +234,7 @@ class TaskRepository:
                     task.result,
                     task.error,
                     json.dumps(task.history),
+                    task.version,
                 ),
             )
             self._insert_event(event)
@@ -232,8 +256,9 @@ class TaskRepository:
                     assigned_agent_id = ?,
                     result = ?,
                     error = ?,
-                    history_json = ?
-                WHERE task_id = ?
+                    history_json = ?,
+                    version = version + 1
+                WHERE task_id = ? AND version = ?
                 """,
                 (
                     task.description,
@@ -244,11 +269,22 @@ class TaskRepository:
                     task.error,
                     json.dumps(task.history),
                     task.task_id,
+                    task.version,
                 ),
             )
 
             if cursor.rowcount != 1:
+                # Check if it was deleted or updated
+                exists = self._connection.execute(
+                    "SELECT 1 FROM tasks WHERE task_id = ?", (task.task_id,)
+                ).fetchone()
+                if exists:
+                    raise ConcurrentTaskUpdateError(
+                        f"Task {task.task_id} was updated by another process."
+                    )
                 raise KeyError(f"Task not found: {task.task_id}")
+
+            task.version += 1
 
             self._insert_event(event)
 

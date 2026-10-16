@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from jarvis.events import ExecutionEvent
-from jarvis.repository import TaskRepository
+from jarvis.repository import TaskRepository, ConcurrentTaskUpdateError
 from jarvis.tasks import Task, TaskStatus
 
 
@@ -138,6 +138,77 @@ class RepositoryTests(unittest.TestCase):
                     repo.create_task_with_event(new_task, duplicate_event)
 
                 self.assertIsNone(repo.get_task(new_task.task_id))
+
+    def test_concurrent_task_update_raises_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = str(Path(temp) / "jarvis.db")
+            task = Task(description="Concurrency test")
+
+            with TaskRepository(db) as repo:
+                repo.create_task(task)
+
+                # Fetch two copies of the same task, simulating concurrent access
+                task_copy_1 = repo.get_task(task.task_id)
+                task_copy_2 = repo.get_task(task.task_id)
+
+                assert task_copy_1 is not None
+                assert task_copy_2 is not None
+
+                # First copy transitions and saves successfully
+                task_copy_1.transition(TaskStatus.PLANNING)
+                repo.update_task(task_copy_1)
+
+                # Second copy transitions but is now operating on a stale version
+                task_copy_2.transition(TaskStatus.CANCELLED)
+
+                with self.assertRaises(ConcurrentTaskUpdateError):
+                    repo.update_task(task_copy_2)
+
+                # Verify that the database correctly retains the first successful edit
+                final_task = repo.get_task(task.task_id)
+                assert final_task is not None
+                self.assertEqual(final_task.status, TaskStatus.PLANNING)
+                self.assertEqual(final_task.version, 1)
+
+    def test_concurrent_save_task_with_event_raises_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = str(Path(temp) / "jarvis.db")
+            task = Task(description="Concurrency event test")
+
+            with TaskRepository(db) as repo:
+                repo.create_task(task)
+
+                # Fetch two copies
+                task_copy_1 = repo.get_task(task.task_id)
+                task_copy_2 = repo.get_task(task.task_id)
+
+                assert task_copy_1 is not None
+                assert task_copy_2 is not None
+
+                # Copy 1 saves with event successfully
+                task_copy_1.transition(TaskStatus.PLANNING)
+                event_1 = ExecutionEvent(
+                    task_id=task_copy_1.task_id,
+                    event_type="event.1",
+                    status=task_copy_1.status.value,
+                )
+                repo.save_task_with_event(task_copy_1, event_1)
+
+                # Copy 2 attempts to save with event, should raise exception
+                task_copy_2.transition(TaskStatus.CANCELLED)
+                event_2 = ExecutionEvent(
+                    task_id=task_copy_2.task_id,
+                    event_type="event.2",
+                    status=task_copy_2.status.value,
+                )
+
+                with self.assertRaises(ConcurrentTaskUpdateError):
+                    repo.save_task_with_event(task_copy_2, event_2)
+
+                final_task = repo.get_task(task.task_id)
+                assert final_task is not None
+                self.assertEqual(final_task.status, TaskStatus.PLANNING)
+                self.assertEqual(final_task.version, 1)
 
 if __name__ == "__main__":
     unittest.main()
