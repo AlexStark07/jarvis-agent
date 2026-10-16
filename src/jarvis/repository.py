@@ -10,8 +10,13 @@ from jarvis.events import ExecutionEvent
 from jarvis.tasks import Task, TaskStatus
 
 
+
 def _datetime(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+class ConcurrentTaskUpdateError(RuntimeError):
+    """Raised when a task was changed after it was loaded."""
 
 
 class TaskRepository:

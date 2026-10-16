@@ -68,10 +68,13 @@ class Task:
     status: TaskStatus = TaskStatus.QUEUED
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    
     assigned_agent_id: str | None = None
     result: str | None = None
     error: str | None = None
     history: list[dict[str, str]] = field(default_factory=list)
+    version: int = 0
+
 
     def __post_init__(self) -> None:
         if not self.description.strip():
