@@ -1,2 +1,13 @@
-# jarvis-agent
-Production-oriented, multi-agent AI operating system with a parent orchestrator, isolated Docker workers, voice interaction and commercial deployment goals.
+﻿# JARVIS AI
+
+A voice-first, multi-agent AI operating system.
+
+## Engineering documents
+- docs/PROJECT_MEMORY.md
+- docs/ARCHITECTURE.md
+- docs/ENGINEERING_SPEC.md
+- docs/BUILD_LOG.md
+- docs/DECISIONS.md
+
+## Development
+Use the project-local Python environment at .venv.
