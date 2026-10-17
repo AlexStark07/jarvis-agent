@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -38,11 +38,11 @@ def health_check():
     return {"status": "ok", "docker_enabled": worker_manager.use_docker}
 
 @app.post("/tasks", response_model=TaskResponse)
-def submit_task(request: TaskCreate):
+def submit_task(request: TaskCreate, background_tasks: BackgroundTasks):
     task = exec_service.submit(request.description)
-    # Fire and forget execution trigger for MVP sync flow processing
-    processed = supervisor.process_task(task.task_id)
-    return TaskResponse(**processed.__dict__)
+    # Fire and forget execution trigger off main thread
+    background_tasks.add_task(supervisor.process_task, task.task_id)
+    return TaskResponse(**task.__dict__)
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
 def get_task(task_id: str):
@@ -67,7 +67,7 @@ def get_task_events(task_id: str):
     return [e.__dict__ for e in events]
 
 @app.post("/approvals/{request_id}")
-def resolve_approval(request_id: str, action: ApprovalAction):
+def resolve_approval(request_id: str, action: ApprovalAction, background_tasks: BackgroundTasks):
     # Simulated auth - normally checking JWT payload against roles
     approval = repo.get_approval(request_id)
     if not approval:
@@ -87,7 +87,7 @@ def resolve_approval(request_id: str, action: ApprovalAction):
         repo.update_task(task)
 
         exec_service.transition(task.task_id, TaskStatus.RUNNING)
-        supervisor.process_task(task.task_id)
+        background_tasks.add_task(supervisor.process_task, task.task_id)
 
     elif action.action == "reject":
         approval.reject(action.user_id)
