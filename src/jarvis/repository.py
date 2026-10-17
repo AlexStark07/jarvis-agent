@@ -8,6 +8,7 @@ from typing import Any
 
 from jarvis.events import ExecutionEvent
 from jarvis.tasks import Task, TaskStatus
+from jarvis.approvals import ApprovalRequest, ApprovalStatus
 
 
 
@@ -33,6 +34,7 @@ class TaskRepository:
         self._connection = sqlite3.connect(
             self.database_path,
             timeout=10,
+            check_same_thread=False,
         )
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
@@ -69,6 +71,18 @@ class TaskRepository:
 
                 CREATE INDEX IF NOT EXISTS idx_events_task_time
                 ON execution_events(task_id, occurred_at);
+
+                CREATE TABLE IF NOT EXISTS approval_requests (
+                    request_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    resolved_by TEXT,
+                    FOREIGN KEY(task_id) REFERENCES tasks(task_id)
+                );
             """)
 
             # Migration for existing databases
@@ -184,6 +198,67 @@ class TaskRepository:
                     json.dumps(event.metadata),
                 ),
             )
+
+    def create_approval(self, approval: ApprovalRequest) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO approval_requests (
+                    request_id, task_id, action, target, status,
+                    created_at, resolved_at, resolved_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    approval.request_id,
+                    approval.task_id,
+                    approval.action,
+                    approval.target,
+                    approval.status.value,
+                    approval.created_at.isoformat(),
+                    approval.resolved_at.isoformat() if approval.resolved_at else None,
+                    approval.resolved_by,
+                ),
+            )
+
+    def get_approval(self, request_id: str) -> ApprovalRequest | None:
+        row = self._connection.execute(
+            "SELECT * FROM approval_requests WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return ApprovalRequest(
+            request_id=row["request_id"],
+            task_id=row["task_id"],
+            action=row["action"],
+            target=row["target"],
+            status=ApprovalStatus(row["status"]),
+            created_at=_datetime(row["created_at"]),
+            resolved_at=_datetime(row["resolved_at"]) if row["resolved_at"] else None,
+            resolved_by=row["resolved_by"],
+        )
+
+    def update_approval(self, approval: ApprovalRequest) -> None:
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE approval_requests SET
+                    status = ?,
+                    resolved_at = ?,
+                    resolved_by = ?
+                WHERE request_id = ?
+                """,
+                (
+                    approval.status.value,
+                    approval.resolved_at.isoformat() if approval.resolved_at else None,
+                    approval.resolved_by,
+                    approval.request_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Approval not found: {approval.request_id}")
 
     def list_events(self, task_id: str) -> list[ExecutionEvent]:
         rows = self._connection.execute(
