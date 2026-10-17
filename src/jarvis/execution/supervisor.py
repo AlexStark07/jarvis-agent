@@ -87,17 +87,12 @@ class Supervisor:
         self.app = workflow.compile()
 
     def _node_plan(self, state: SupervisorState) -> SupervisorState:
-        lower_desc = state["description"].lower()
-        if "research" in lower_desc or "search" in lower_desc:
-            agent_id = "research"
-        elif "deploy" in lower_desc or "infrastructure" in lower_desc:
-            agent_id = "operations"
-        elif "email" in lower_desc or "message" in lower_desc:
-            agent_id = "communications"
-        elif "unsafe" in lower_desc or "validate" in lower_desc:
-            agent_id = "qa_security"
-        else:
-            agent_id = "developer"
+        prompt = f"Plan task: {state['description']}. Available agents: research, developer, operations, communications, qa_security. Reply with agent_id only."
+        response = self.provider.generate(prompt)
+        agent_id = response.content.strip().lower()
+
+        if agent_id not in self.specialists:
+            agent_id = "developer" # Default fallback
 
         self.execution_service.assign_agent(state["task_id"], agent_id)
         self.execution_service.transition(state["task_id"], TaskStatus.RUNNING)

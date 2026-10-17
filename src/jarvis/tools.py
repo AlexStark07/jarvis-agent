@@ -24,6 +24,38 @@ class ToolRegistry:
     def get_tool(self, name: str) -> Optional[ToolConfig]:
         return self._tools.get(name)
 
+    def get_langchain_tools(self, tool_names: list[str]) -> list[Any]:
+        from langchain_core.tools import StructuredTool
+        from pydantic import create_model
+
+        tools = []
+        for name in tool_names:
+            config = self._tools.get(name)
+            if not config:
+                continue
+
+            # Create dynamic Pydantic model for input schema arguments
+            fields = {}
+            for prop, details in config.input_schema.get("properties", {}).items():
+                # Simplified mapping for MVP
+                prop_type = str if details.get("type") == "string" else list
+                fields[prop] = (prop_type, ...)
+
+            InputSchema = create_model(f"{name}Schema", **fields)
+
+            def make_handler(tool_name):
+                return lambda **kwargs: self.execute(tool_name, kwargs).output
+
+            tool = StructuredTool.from_function(
+                func=make_handler(name),
+                name=name,
+                description=config.description,
+                args_schema=InputSchema,
+            )
+            tools.append(tool)
+
+        return tools
+
     def execute(self, name: str, kwargs: dict) -> ToolExecutionResult:
         if name not in self._handlers:
             return ToolExecutionResult(success=False, output="", error=f"Tool {name} not found.")
@@ -86,4 +118,117 @@ registry.register(
         requires_approval=True
     ),
     lambda draft: f"Message sent successfully: {draft[:20]}..."
+)
+
+def _validate_handler(is_safe, reason):
+    if not is_safe:
+        raise Exception(f"Unsafe request detected: {reason}")
+    return f"Validation result: safe={is_safe}, reason={reason}"
+
+# 4. QA Security Agent Tool
+registry.register(
+    ToolConfig(
+        name="validate_output",
+        description="Validates output for safety and security.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "is_safe": {"type": "boolean"},
+                "reason": {"type": "string"}
+            },
+            "required": ["is_safe", "reason"]
+        }
+    ),
+    _validate_handler
+)
+# 5. Missing Research and Developer tools
+registry.register(
+    ToolConfig(
+        name="web_search",
+        description="Searches the web for information.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            },
+            "required": ["query"]
+        }
+    ),
+    lambda query: f"Search results for: {query}"
+)
+
+registry.register(
+    ToolConfig(
+        name="read_document",
+        description="Reads a document from the workspace.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"}
+            },
+            "required": ["path"]
+        }
+    ),
+    lambda path: f"Document contents for: {path}"
+)
+
+registry.register(
+    ToolConfig(
+        name="write_file",
+        description="Writes content to a file.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"}
+            },
+            "required": ["path", "content"]
+        }
+    ),
+    lambda path, content: f"Successfully wrote to {path}"
+)
+
+registry.register(
+    ToolConfig(
+        name="run_tests",
+        description="Runs test suite.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "suite": {"type": "string"}
+            },
+            "required": ["suite"]
+        }
+    ),
+    lambda suite: "Tests passed successfully"
+)
+
+registry.register(
+    ToolConfig(
+        name="check_health",
+        description="Checks health of a service.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"}
+            },
+            "required": ["target"]
+        }
+    ),
+    lambda target: f"{target} is healthy"
+)
+
+registry.register(
+    ToolConfig(
+        name="run_security_scan",
+        description="Runs a security scan on the repository.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"}
+            },
+            "required": ["target"]
+        }
+    ),
+    lambda target: f"Scan complete for {target}. No critical issues."
 )
