@@ -20,7 +20,21 @@ def setup_teardown():
         original_db = repo.database_path
         repo.database_path = db
         repo._initialize()
+
+        from jarvis.api.main import background_worker
+        # Give worker its own path
+        background_worker.repo_path = db
+        background_worker.poll_interval = 0.05
+
+        # Stop and clear the worker from previous tests
+        background_worker.stop()
+        background_worker._thread = None
+        background_worker._stop_event.clear()
+        background_worker._active_tasks.clear()
+        background_worker.start()
+
         yield
+        background_worker.stop()
         repo.database_path = original_db
         jarvis.providers._MOCK_SEQUENCE.clear()
         from jarvis.api.main import provider
@@ -77,7 +91,13 @@ def test_approval_workflow():
     task = wait_for_status(task_id, TaskStatus.WAITING_FOR_APPROVAL)
     assert task.status == TaskStatus.WAITING_FOR_APPROVAL
 
-    row = repo._connection.execute("SELECT request_id FROM approval_requests WHERE task_id = ?", (task_id,)).fetchone()
+    # Add a slight retry to fetch the row from sqlite
+    for _ in range(10):
+        with repo._get_connection() as conn:
+            row = conn.execute("SELECT request_id FROM approval_requests WHERE task_id = ?", (task_id,)).fetchone()
+            if row:
+                break
+        time.sleep(0.05)
     assert row is not None
     req_id = row["request_id"]
 
@@ -109,7 +129,13 @@ def test_approval_rejection_workflow():
     task = wait_for_status(task_id, TaskStatus.WAITING_FOR_APPROVAL)
     assert task.status == TaskStatus.WAITING_FOR_APPROVAL
 
-    row = repo._connection.execute("SELECT request_id FROM approval_requests WHERE task_id = ?", (task_id,)).fetchone()
+    # Add a slight retry to fetch the row from sqlite
+    for _ in range(10):
+        with repo._get_connection() as conn:
+            row = conn.execute("SELECT request_id FROM approval_requests WHERE task_id = ?", (task_id,)).fetchone()
+            if row:
+                break
+        time.sleep(0.05)
     assert row is not None
     req_id = row["request_id"]
 

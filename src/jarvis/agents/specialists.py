@@ -18,7 +18,7 @@ class BaseSpecialist(Agent):
         for _ in range(max_iterations):
             # Check for cancellation before calling provider
             current_task = self.execution_service.get_task(inputs.task_id) if hasattr(self, 'execution_service') and self.execution_service else None
-            if current_task and current_task.status == "cancelled":
+            if current_task and current_task.status.value == "cancelled":
                  return AgentOutput(task_id=inputs.task_id, status="failed", result="", error="Task was cancelled")
 
             # Format history for provider context (simplified for MVP)
