@@ -16,6 +16,11 @@ class BaseSpecialist(Agent):
         max_iterations = 5
 
         for _ in range(max_iterations):
+            # Check for cancellation before calling provider
+            current_task = self.execution_service.get_task(inputs.task_id) if hasattr(self, 'execution_service') and self.execution_service else None
+            if current_task and current_task.status == "cancelled":
+                 return AgentOutput(task_id=inputs.task_id, status="failed", result="", error="Task was cancelled")
+
             # Format history for provider context (simplified for MVP)
             response = self.provider.generate(prompt, system=system_prompt, tools=tools)
 
@@ -46,6 +51,10 @@ class BaseSpecialist(Agent):
 
                 # Halt for human approval if required
                 if tool_config and tool_config.requires_approval and not inputs.context.get("approved_action") == tool_name:
+                    # Prevent duplicate execution: check if we've already asked for approval in context history
+                    if inputs.context.get("pending_action") and inputs.context["pending_action"].get("action") == tool_name:
+                         return AgentOutput(task_id=inputs.task_id, status="failed", result="", error=f"Duplicate approval requested for {tool_name}")
+
                     return AgentOutput(
                         task_id=inputs.task_id,
                         status="waiting_for_approval",

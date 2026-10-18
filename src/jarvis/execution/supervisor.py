@@ -28,11 +28,11 @@ class Supervisor:
         self.worker_manager = worker_manager
 
         self.specialists: Dict[str, Agent] = {
-            "research": ResearchAgent(provider, worker_manager),
-            "developer": DeveloperAgent(provider, worker_manager),
-            "operations": OperationsAgent(provider, worker_manager),
-            "communications": CommunicationsAgent(provider, worker_manager),
-            "qa_security": QASecurityAgent(provider, worker_manager),
+            "research": ResearchAgent(provider, worker_manager, execution_service),
+            "developer": DeveloperAgent(provider, worker_manager, execution_service),
+            "operations": OperationsAgent(provider, worker_manager, execution_service),
+            "communications": CommunicationsAgent(provider, worker_manager, execution_service),
+            "qa_security": QASecurityAgent(provider, worker_manager, execution_service),
         }
 
         # Build LangGraph Workflow
@@ -143,7 +143,10 @@ class Supervisor:
         return state
 
     def _node_fail(self, state: SupervisorState) -> SupervisorState:
-        self.execution_service.fail(state["task_id"], state["error"] or "Task failed.")
+        # Prevent failing an already cancelled task
+        task = self.execution_service.get_task(state["task_id"])
+        if task and task.status.value != "cancelled":
+             self.execution_service.fail(state["task_id"], state["error"] or "Task failed.")
         return state
 
     def process_task(self, task_id: str) -> None:
@@ -157,7 +160,8 @@ class Supervisor:
         for entry in reversed(task.history):
             if "approved_action" in entry:
                 context["approved_action"] = entry["approved_action"]
-                break
+            if "pending_action" in entry:
+                context["pending_action"] = entry["pending_action"]
 
         initial_state = SupervisorState(
             task_id=task.task_id,

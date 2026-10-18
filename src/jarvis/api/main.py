@@ -16,7 +16,11 @@ app = FastAPI(title="JARVIS API", version="0.1.0")
 repo = TaskRepository("data/jarvis.db")
 exec_service = ExecutionService(repo)
 provider = get_provider("mock")
-worker_manager = WorkerManager()
+try:
+    worker_manager = WorkerManager()
+except RuntimeError as e:
+    worker_manager = None
+    print(f"Warning: WorkerManager initialization failed: {e}")
 supervisor = Supervisor(exec_service, provider, worker_manager)
 
 class TaskCreate(BaseModel):
@@ -56,19 +60,14 @@ def cancel_task(task_id: str):
     task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
-        raise HTTPException(status_code=400, detail="Cannot cancel terminal task")
-    cancelled = exec_service.transition(task_id, TaskStatus.CANCELLED)
-    return TaskResponse(**cancelled.__dict__)
 
-@app.get("/tasks/{task_id}/events")
-def get_task_events(task_id: str):
-    events = repo.list_events(task_id)
-    return [e.__dict__ for e in events]
-
+    try:
+        exec_service.transition(task_id, TaskStatus.CANCELLED)
+        return {"status": "cancelled"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 @app.post("/approvals/{request_id}")
 def resolve_approval(request_id: str, action: ApprovalAction, background_tasks: BackgroundTasks):
-    # Simulated auth - normally checking JWT payload against roles
     approval = repo.get_approval(request_id)
     if not approval:
         raise HTTPException(status_code=404, detail="Approval not found")
@@ -82,7 +81,6 @@ def resolve_approval(request_id: str, action: ApprovalAction, background_tasks: 
 
         # Resume task logic
         task = repo.get_task(approval.task_id)
-        # Manually embed the approved action context since we're simple for MVP
         task.history.append({"approved_action": approval.action})
         repo.update_task(task)
 

@@ -18,6 +18,8 @@ class WorkerManager:
 
     def __init__(self, use_docker: bool = True):
         self.use_docker = use_docker
+        if not self.use_docker:
+            raise RuntimeError("Docker isolation is mandatory. Cannot disable use_docker.")
         self.workspace_base = Path(tempfile.gettempdir()) / "jarvis_workspaces"
         self.workspace_base.mkdir(parents=True, exist_ok=True)
 
@@ -37,11 +39,7 @@ class WorkerManager:
 
     def execute(self, command: list[str], workspace_path: str, timeout: int = 300) -> WorkerResult:
         """Execute a command either in Docker or natively if explicitly configured for testing."""
-        if self.use_docker:
-            return self._execute_docker(command, workspace_path, timeout)
-
-        # Security: Do not allow arbitrary host execution unless running specific internal unit tests.
-        raise RuntimeError("Native execution is disabled for security reasons. Enable Docker.")
+        return self._execute_docker(command, workspace_path, timeout)
 
     def _execute_docker(self, command: list[str], workspace_path: str, timeout: int) -> WorkerResult:
         """Execute a command inside a restricted Python Docker container."""
@@ -61,26 +59,6 @@ class WorkerManager:
         try:
             result = subprocess.run(
                 docker_cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-            return WorkerResult(
-                exit_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr
-            )
-        except subprocess.TimeoutExpired as e:
-            return WorkerResult(exit_code=124, stdout="", stderr="", error=f"Timeout after {timeout}s: {e}")
-        except Exception as e:
-            return WorkerResult(exit_code=-1, stdout="", stderr="", error=str(e))
-
-    def _execute_native(self, command: list[str], workspace_path: str, timeout: int) -> WorkerResult:
-        """Fallback for environments without Docker. Executes as a local subprocess."""
-        try:
-            result = subprocess.run(
-                command,
-                cwd=workspace_path,
                 capture_output=True,
                 text=True,
                 timeout=timeout

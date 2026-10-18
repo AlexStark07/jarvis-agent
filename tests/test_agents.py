@@ -50,9 +50,6 @@ class TestSpecialists(unittest.TestCase):
         self.assertEqual(output.status, "failed")
         self.assertIn("Unsafe request detected", output.error)
 
-if __name__ == "__main__":
-    unittest.main()
-
 
     def test_agent_invalid_tool(self):
         from langchain_core.messages import AIMessage, ToolCall
@@ -78,3 +75,6 @@ if __name__ == "__main__":
         agent = OperationsAgent(provider)
         output = agent.execute(AgentInput(task_id="1", description="Check health without args"))
         self.assertEqual(output.status, "failed")
+
+if __name__ == "__main__":
+    unittest.main()

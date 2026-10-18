@@ -83,7 +83,7 @@ registry.register(
             "required": ["command"]
         }
     ),
-    lambda command, worker_manager, workspace: worker_manager.execute(command, workspace)
+    lambda command, worker_manager: worker_manager.execute(command, os.path.abspath(os.environ.get("JARVIS_WORKSPACE", "/tmp/jarvis_workspace")))
 )
 
 # 2. Operations Agent Tool
@@ -141,7 +141,19 @@ registry.register(
     ),
     _validate_handler
 )
-# 5. Missing Research and Developer tools
+import os
+import subprocess
+
+WORKSPACE_DIR = os.path.abspath(os.environ.get("JARVIS_WORKSPACE", "/tmp/jarvis_workspace"))
+os.makedirs(WORKSPACE_DIR, exist_ok=True)
+
+def _safe_path(path_str):
+    full_path = os.path.abspath(os.path.join(WORKSPACE_DIR, path_str))
+    if not full_path.startswith(WORKSPACE_DIR):
+        raise ValueError("Path traversal attack detected.")
+    return full_path
+
+# 5. Real Scoped Tools
 registry.register(
     ToolConfig(
         name="web_search",
@@ -154,7 +166,7 @@ registry.register(
             "required": ["query"]
         }
     ),
-    lambda query: f"Search results for: {query}"
+    lambda query: "Mock Search result for " + query if os.environ.get("MOCK_EXTERNAL", "1") == "1" else f"Live search not implemented for MVP. Query: {query}"
 )
 
 registry.register(
@@ -169,13 +181,13 @@ registry.register(
             "required": ["path"]
         }
     ),
-    lambda path: f"Document contents for: {path}"
+    lambda path: open(_safe_path(path), 'r').read()
 )
 
 registry.register(
     ToolConfig(
         name="write_file",
-        description="Writes content to a file.",
+        description="Writes content to a file in the workspace.",
         input_schema={
             "type": "object",
             "properties": {
@@ -185,7 +197,7 @@ registry.register(
             "required": ["path", "content"]
         }
     ),
-    lambda path, content: f"Successfully wrote to {path}"
+    lambda path, content: [open(_safe_path(path), 'w').write(content), f"Successfully wrote to {path}"][1]
 )
 
 registry.register(
@@ -200,9 +212,8 @@ registry.register(
             "required": ["suite"]
         }
     ),
-    lambda suite: "Tests passed successfully"
+    lambda suite: subprocess.run(["pytest", _safe_path(suite)], capture_output=True, text=True, check=False).stdout
 )
-
 registry.register(
     ToolConfig(
         name="check_health",
@@ -215,7 +226,7 @@ registry.register(
             "required": ["target"]
         }
     ),
-    lambda target: f"{target} is healthy"
+    lambda target: f"{target} is healthy" if "http" not in target else "HTTP healthcheck unimplemented"
 )
 
 registry.register(

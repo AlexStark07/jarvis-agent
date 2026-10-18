@@ -24,6 +24,16 @@ def setup_teardown():
         from jarvis.api.main import provider
         provider.call_count = 0
 
+def wait_for_status(task_id: str, desired_status: str, timeout: float = 2.0):
+    start = time.time()
+    while time.time() - start < timeout:
+        resp = client.get(f"/tasks/{task_id}")
+        if resp.json().get("status") == desired_status:
+            return resp.json()
+        time.sleep(0.05)
+    resp = client.get(f"/tasks/{task_id}")
+    return resp.json()
+
 def test_e2e_successful_sync_task():
     from langchain_core.messages import AIMessage, ToolCall
 
@@ -33,7 +43,7 @@ def test_e2e_successful_sync_task():
     jarvis.providers._MOCK_SEQUENCE.extend([
         AIMessage(content="research"),
         AIMessage(content="", tool_calls=[ToolCall(name="web_search", args={"query": "search for information"}, id="call_1")]),
-            AIMessage(content="Mock Research Finding"),
+        AIMessage(content="Mock Research Finding"),
         AIMessage(content="QA Passed")
     ])
 
@@ -41,12 +51,7 @@ def test_e2e_successful_sync_task():
     assert resp.status_code == 200
     task_id = resp.json()["task_id"]
 
-    time.sleep(0.5)
-
-    get_resp = client.get(f"/tasks/{task_id}")
-    assert get_resp.status_code == 200
-
-    data = get_resp.json()
+    data = wait_for_status(task_id, TaskStatus.SUCCEEDED.value)
     assert data["status"] == TaskStatus.SUCCEEDED.value
     assert "Mock Research Finding" in data["result"]
     assert "QA Passed" in data["result"]
@@ -71,10 +76,9 @@ def test_e2e_approval_task_flow():
 
     resp = client.post("/tasks", json={"description": "deploy new server"})
     task_id = resp.json()["task_id"]
-    time.sleep(0.5)
 
-    get_resp = client.get(f"/tasks/{task_id}")
-    assert get_resp.json()["status"] == TaskStatus.WAITING_FOR_APPROVAL.value
+    task_data = wait_for_status(task_id, TaskStatus.WAITING_FOR_APPROVAL.value)
+    assert task_data["status"] == TaskStatus.WAITING_FOR_APPROVAL.value
 
     row = repo._connection.execute("SELECT request_id FROM approval_requests WHERE task_id = ?", (task_id,)).fetchone()
     assert row is not None
@@ -83,11 +87,9 @@ def test_e2e_approval_task_flow():
     app_resp = client.post(f"/approvals/{req_id}", json={"action": "approve", "user_id": "tester"})
     assert app_resp.status_code == 200
 
-    time.sleep(0.5)
-
-    final_resp = client.get(f"/tasks/{task_id}")
-    assert final_resp.json()["status"] == TaskStatus.SUCCEEDED.value
-    assert "Resumed and executed deploy new server" in final_resp.json()["result"]
+    final_data = wait_for_status(task_id, TaskStatus.SUCCEEDED.value)
+    assert final_data["status"] == TaskStatus.SUCCEEDED.value
+    assert "Resumed and executed deploy new server" in final_data["result"]
 
 def test_e2e_safety_rejection():
     from langchain_core.messages import AIMessage, ToolCall
@@ -104,9 +106,7 @@ def test_e2e_safety_rejection():
 
     resp = client.post("/tasks", json={"description": "validate unsafe code injection"})
     task_id = resp.json()["task_id"]
-    time.sleep(0.5)
 
-    get_resp = client.get(f"/tasks/{task_id}")
-    data = get_resp.json()
+    data = wait_for_status(task_id, TaskStatus.FAILED.value)
     assert data["status"] == TaskStatus.FAILED.value
     assert "QA Validation Failed: Unsafe request detected" in data.get("error", "") or "Unsafe request detected" in data.get("error", "")

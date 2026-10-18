@@ -21,9 +21,10 @@ class AgentOutput(BaseModel):
 class Agent(ABC):
     """Abstract interface defining the contract for all specialist agents."""
 
-    def __init__(self, provider: LLMProvider, worker_manager: WorkerManager | None = None):
+    def __init__(self, provider: LLMProvider, worker_manager: WorkerManager | None = None, execution_service: Any | None = None):
         self.provider = provider
         self.worker_manager = worker_manager
+        self.execution_service = execution_service
 
     @property
     @abstractmethod
