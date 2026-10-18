@@ -9,6 +9,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "langgraph>=0.0.1",
     "docker>=6.0.0",
+    "python-multipart>=0.0.6",
+    "openai>=1.0.0"
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  jarvis-api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./workspace:/tmp/jarvis_workspace
+    environment:
+      - JARVIS_API_KEY=${JARVIS_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    # Mount docker socket so the internal WorkerManager can spawn isolated sandboxes
+    # NOTE: This requires host system Docker access.
+      - /var/run/docker.sock:/var/run/docker.sock

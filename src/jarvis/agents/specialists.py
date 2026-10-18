@@ -104,7 +104,7 @@ class OperationsAgent(BaseSpecialist):
     def agent_id(self) -> str: return "operations"
 
     @property
-    def allowed_tools(self) -> List[str]: return ["check_health", "modify_infrastructure"]
+    def allowed_tools(self) -> List[str]: return ["check_health", "modify_infrastructure", "desktop_preview_action"]
 
     def execute(self, inputs: AgentInput) -> AgentOutput:
         return self._execute_loop(inputs, system_prompt="You are an operations agent handling infrastructure.")

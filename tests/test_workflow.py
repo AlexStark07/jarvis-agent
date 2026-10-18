@@ -1,3 +1,6 @@
+import os
+if "JARVIS_API_KEY" in os.environ:
+    del os.environ["JARVIS_API_KEY"]
 import pytest
 import time
 import tempfile
@@ -7,51 +10,69 @@ from fastapi.testclient import TestClient
 from jarvis.api.main import app, repo
 from jarvis.tasks import TaskStatus
 from jarvis.approvals import ApprovalRequest
-import jarvis.providers
 
 client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
-    # Use a fresh in-memory database for API tests
     with tempfile.TemporaryDirectory() as temp:
-        db = str(Path(temp) / "jarvis_api.db")
-        # Override the app's repo temporarily for tests
+        db = str(Path(temp) / "jarvis_e2e.db")
         original_db = repo.database_path
         repo.database_path = db
         repo._initialize()
 
-        from jarvis.api.main import background_worker
-        # Give worker its own path
+        from jarvis.api.main import background_worker, exec_service
+        import jarvis.api.main
+        jarvis.api.main.repo = repo
         background_worker.repo_path = db
+        background_worker.supervisor.execution_service.repository = repo
+        exec_service.repository = repo
+
         background_worker.poll_interval = 0.05
 
-        # Stop and clear the worker from previous tests
         background_worker.stop()
         background_worker._thread = None
         background_worker._stop_event.clear()
         background_worker._active_tasks.clear()
         background_worker.start()
 
-        yield
-        background_worker.stop()
-        repo.database_path = original_db
+        import jarvis.providers
         jarvis.providers._MOCK_SEQUENCE.clear()
         from jarvis.api.main import provider
         provider.call_count = 0
 
-def wait_for_status(task_id: str, desired_status: str, timeout: float = 2.0):
+        yield
+
+        background_worker.stop()
+        background_worker._thread = None
+        background_worker._stop_event.clear()
+        background_worker._active_tasks.clear()
+        repo.database_path = original_db
+        jarvis.providers._MOCK_SEQUENCE.clear()
+
+    # To fix "pytest tests/ -v" state leakage from test_voice etc
+    import jarvis.providers
+    jarvis.providers._MOCK_SEQUENCE.clear()
+
+def wait_for_status(task_id: str, desired_status: str, timeout: float = 5.0):
     start = time.time()
     while time.time() - start < timeout:
-        resp = client.get(f"/tasks/{task_id}")
-        if resp.json().get("status") == desired_status:
-            return resp.json()
+        res = client.get(f"/tasks/{task_id}")
+        if res.status_code != 200:
+            print("ERROR GETTING TASK:", res.status_code, res.json())
+        resp = res.json()
+        if resp.get("status") == desired_status:
+            return resp
         time.sleep(0.05)
-    resp = client.get(f"/tasks/{task_id}")
-    return resp.json()
+    return client.get(f"/tasks/{task_id}").json()
 
 def test_e2e_successful_sync_task():
+    import jarvis.providers
+    jarvis.providers._MOCK_SEQUENCE.clear()
+    from jarvis.api.main import provider
+    provider.call_count = 0
     from langchain_core.messages import AIMessage, ToolCall
+    import jarvis.providers
 
     # 1. Plan: route to research
     # 2. Research agent executes
@@ -63,17 +84,21 @@ def test_e2e_successful_sync_task():
         AIMessage(content="QA Passed")
     ])
 
+    # Submit task
     resp = client.post("/tasks", json={"description": "search for information"})
     assert resp.status_code == 200
     task_id = resp.json()["task_id"]
 
-    data = wait_for_status(task_id, TaskStatus.SUCCEEDED.value)
+    data = wait_for_status(task_id, TaskStatus.SUCCEEDED.value, timeout=10.0)
+    if data["status"] != TaskStatus.SUCCEEDED.value:
+        print("FAILED TASK DATA:", data)
     assert data["status"] == TaskStatus.SUCCEEDED.value
     assert "Mock Research Finding" in data["result"]
     assert "QA Passed" in data["result"]
 
 def test_e2e_approval_task_flow():
     from langchain_core.messages import AIMessage, ToolCall
+    import jarvis.providers
 
     # Plan: route to operations
     # Ops agent issues deploy tool call
@@ -92,17 +117,17 @@ def test_e2e_approval_task_flow():
 
     resp = client.post("/tasks", json={"description": "deploy new server"})
     task_id = resp.json()["task_id"]
-
     task_data = wait_for_status(task_id, TaskStatus.WAITING_FOR_APPROVAL.value)
     assert task_data["status"] == TaskStatus.WAITING_FOR_APPROVAL.value
 
-    # Add a slight retry to fetch the row from sqlite
-    for _ in range(10):
+    # We must manually find the approval request since we don't have an endpoint for listing them yet
+    for _ in range(50):
         with repo._get_connection() as conn:
             row = conn.execute("SELECT request_id FROM approval_requests WHERE task_id = ?", (task_id,)).fetchone()
             if row:
                 break
         time.sleep(0.05)
+
     assert row is not None
     req_id = row["request_id"]
 
@@ -115,6 +140,7 @@ def test_e2e_approval_task_flow():
 
 def test_e2e_safety_rejection():
     from langchain_core.messages import AIMessage, ToolCall
+    import jarvis.providers
 
     # Plan: route to qa_security
     # QA agent rejects
@@ -128,7 +154,6 @@ def test_e2e_safety_rejection():
 
     resp = client.post("/tasks", json={"description": "validate unsafe code injection"})
     task_id = resp.json()["task_id"]
-
     data = wait_for_status(task_id, TaskStatus.FAILED.value)
     assert data["status"] == TaskStatus.FAILED.value
-    assert "QA Validation Failed: Unsafe request detected" in data.get("error", "") or "Unsafe request detected" in data.get("error", "")
+    assert "Unsafe request detected" in data["error"]

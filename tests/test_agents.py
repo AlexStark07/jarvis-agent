@@ -14,6 +14,8 @@ class TestSpecialists(unittest.TestCase):
         ])
         agent = ResearchAgent(provider)
         output = agent.execute(AgentInput(task_id="1", description="Research test"))
+        if output.status != "success":
+            print(output.error)
         self.assertEqual(output.status, "success")
         self.assertIn("Mock Research Finding", output.result)
 
@@ -23,6 +25,8 @@ class TestSpecialists(unittest.TestCase):
         ])
         agent = DeveloperAgent(provider)
         output = agent.execute(AgentInput(task_id="1", description="Write code"))
+        if output.status != "success":
+            print(output.error)
         self.assertEqual(output.status, "success")
         self.assertIn("Code Changes", output.result)
 
@@ -78,3 +82,17 @@ class TestSpecialists(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_desktop_preview_requires_approval(self):
+        from langchain_core.messages import AIMessage, ToolCall
+        provider = MockProvider(sequence=[
+            AIMessage(
+                content="",
+                tool_calls=[ToolCall(name="desktop_preview_action", args={"action_type": "open_app", "target_data": "calculator"}, id="call_1")]
+            )
+        ])
+        agent = OperationsAgent(provider)
+        output = agent.execute(AgentInput(task_id="1", description="Open calculator"))
+        self.assertEqual(output.status, "waiting_for_approval")
+        self.assertTrue(output.requires_approval)
+        self.assertEqual(output.pending_action["action"], "desktop_preview_action")
