@@ -180,34 +180,35 @@ class Supervisor:
             # Run graph from start
             self.app.invoke(initial_state)
         elif task.status == TaskStatus.RUNNING:
-            # Resuming an approved action or retrying. We bypass the `plan` node
-            # which expects transition QUEUED -> PLANNING -> RUNNING, to avoid InvalidTransition.
+            # Resuming an approved action or retrying. We start the graph from the `execute_agent` node directly.
 
-            # Reconstruct inputs from history
-            inputs = AgentInput(task_id=task.task_id, description=task.description, context=context)
+            # Note: We must temporarily update the state for LangGraph to know we are bypassing "plan"
+            initial_state["status"] = "running"
 
-            # Execute agent manually to jumpstart the loop
-            agent = self.specialists[task.assigned_agent_id]
-            try:
-                output = agent.execute(inputs)
-                if output.status == "waiting_for_approval":
-                    self.execution_service.transition(task.task_id, TaskStatus.WAITING_FOR_APPROVAL)
-                    if output.pending_action:
-                        task = self.execution_service.get_task(task.task_id)
-                        task.history.append({"pending_action": output.pending_action})
-                        self.execution_service.repository.update_task(task)
-                elif output.status == "failed":
-                    self.execution_service.fail(task.task_id, output.error or "Unknown error")
+            # Since LangGraph's .invoke() without a checkpointer always starts at START,
+            # and we don't have a checkpointer configured yet, we will just call the graph nodes directly based on the DAG flow.
+            # This is semantically equivalent to a graph step-through for this stateless execution phase.
+            # We must merge partial state dictionaries appropriately.
+
+            current_state = {**initial_state}
+
+            state_update = self._node_execute_agent(current_state)
+            current_state = {**current_state, **state_update}
+
+            if current_state["status"] == "failed":
+                self._node_fail(current_state)
+            elif current_state["status"] == "waiting_for_approval":
+                self._node_wait_approval(current_state)
+            elif current_state["agent_id"] == "qa_security":
+                self._node_complete(current_state)
+            else:
+                state_update = self._node_verify(current_state)
+                current_state = {**current_state, **state_update}
+
+                if current_state["status"] == "failed":
+                    self._node_fail(current_state)
                 else:
-                    self.execution_service.transition(task.task_id, TaskStatus.VERIFYING)
-                    qa = self.specialists["qa_security"]
-                    qa_out = qa.execute(AgentInput(task_id=task.task_id, description=f"Validate: {output.result}"))
-                    if qa_out.status == "failed":
-                        self.execution_service.fail(task.task_id, qa_out.error or "QA Failed")
-                    else:
-                        self.execution_service.complete(task.task_id, f"{output.result}\n{qa_out.result}")
-            except Exception as e:
-                self.execution_service.fail(task.task_id, str(e))
+                    self._node_complete(current_state)
 
         else:
             raise ValueError(f"Cannot process task in state {task.status.value}")
