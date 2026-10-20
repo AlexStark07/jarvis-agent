@@ -1,6 +1,9 @@
+import logging
 from typing import List, Dict, Any
 from jarvis.agents.base import Agent, AgentInput, AgentOutput
 from jarvis.tools import registry
+
+logger = logging.getLogger(__name__)
 
 class BaseSpecialist(Agent):
     """Base class abstracting the LLM tool-calling loop logic for specialists."""
@@ -15,10 +18,12 @@ class BaseSpecialist(Agent):
         messages = []
         max_iterations = 5
 
-        for _ in range(max_iterations):
+        for iteration in range(max_iterations):
+            logger.info(f"Agent {self.agent_id} executing iteration {iteration + 1}/{max_iterations} for task {inputs.task_id}")
             # Check for cancellation before calling provider
             current_task = self.execution_service.get_task(inputs.task_id) if hasattr(self, 'execution_service') and self.execution_service else None
             if current_task and current_task.status.value == "cancelled":
+                 logger.warning(f"Task {inputs.task_id} was cancelled. Aborting agent execution.")
                  return AgentOutput(task_id=inputs.task_id, status="failed", result="", error="Task was cancelled")
 
             # Format history for provider context (simplified for MVP)
@@ -45,6 +50,7 @@ class BaseSpecialist(Agent):
                 tool_args = tool_call["args"]
 
                 if tool_name not in self.allowed_tools:
+                    logger.error(f"Agent {self.agent_id} attempted to use unauthorized tool {tool_name}")
                     return AgentOutput(task_id=inputs.task_id, status="failed", result="", error=f"Unauthorized tool: {tool_name}")
 
                 tool_config = registry.get_tool(tool_name)
@@ -53,8 +59,10 @@ class BaseSpecialist(Agent):
                 if tool_config and tool_config.requires_approval and not inputs.context.get("approved_action") == tool_name:
                     # Prevent duplicate execution: check if we've already asked for approval in context history
                     if inputs.context.get("pending_action") and inputs.context["pending_action"].get("action") == tool_name:
+                         logger.warning(f"Task {inputs.task_id} encountered duplicate approval request for {tool_name}")
                          return AgentOutput(task_id=inputs.task_id, status="failed", result="", error=f"Duplicate approval requested for {tool_name}")
 
+                    logger.info(f"Task {inputs.task_id} pausing for approval on {tool_name}")
                     return AgentOutput(
                         task_id=inputs.task_id,
                         status="waiting_for_approval",
@@ -68,15 +76,18 @@ class BaseSpecialist(Agent):
                     context_kwargs["worker_manager"] = self.worker_manager
 
                 kwargs = {**tool_args, **context_kwargs}
+                logger.info(f"Agent {self.agent_id} executing tool {tool_name} for task {inputs.task_id}")
                 exec_result = registry.execute(tool_name, kwargs)
 
                 if not exec_result.success:
+                    logger.error(f"Tool {tool_name} failed: {exec_result.error}")
                     return AgentOutput(task_id=inputs.task_id, status="failed", result="", error=exec_result.error)
 
                 tool_outputs_collected.append(f"Tool `{tool_name}` output: {exec_result.output}")
 
             prompt += "\n" + "\n".join(tool_outputs_collected)
 
+        logger.error(f"Agent {self.agent_id} exceeded max iterations (5) for task {inputs.task_id}")
         return AgentOutput(task_id=inputs.task_id, status="failed", result="", error="Max tool iterations exceeded.")
 
 class ResearchAgent(BaseSpecialist):

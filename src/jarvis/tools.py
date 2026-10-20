@@ -105,9 +105,7 @@ import socket
 def _modify_infrastructure(target):
     # In a real setup, this would call AWS/GCP SDKs or Terraform. We don't have AWS creds.
     # The requirement is to 'implement the integration interface, configuration, error handling... Never fabricate successful live execution.'
-    if os.environ.get("LIVE_TEST") == "1":
-        raise NotImplementedError(f"Live infrastructure modification for {target} requires AWS/GCP credentials which are not configured.")
-    return f"Simulated infrastructure modification target: {target}"
+    raise NotImplementedError(f"Live infrastructure modification for {target} requires AWS/GCP credentials which are not configured.")
 
 registry.register(
     ToolConfig(
@@ -126,11 +124,28 @@ registry.register(
 )
 
 # 3. Communications Agent Tool
+def _desktop_preview_action(action_type, target_data):
+    raise NotImplementedError("Desktop automation requires live testing environment which is not configured.")
+
+registry.register(
+    ToolConfig(
+        name="desktop_preview_action",
+        description="Performs an automated action on the host desktop.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action_type": {"type": "string"},
+                "target_data": {"type": "string"}
+            },
+            "required": ["action_type", "target_data"]
+        },
+        requires_approval=True
+    ),
+    _desktop_preview_action
+)
+
 def _send_message(draft):
-    if os.environ.get("LIVE_TEST") == "1":
-        # Simulate real SMTP sending failure if not configured
-        raise RuntimeError("SMTP_URL or SENDGRID_API_KEY environment variable is not configured for sending messages.")
-    return f"Message sent successfully: {draft[:20]}..."
+    raise RuntimeError("SMTP_URL or SENDGRID_API_KEY environment variable is not configured for sending messages.")
 
 registry.register(
     ToolConfig(
@@ -148,12 +163,41 @@ registry.register(
     _send_message
 )
 
+import ipaddress
+import urllib.parse
+
+def _is_safe_url(url_or_host: str) -> bool:
+    try:
+        # Check for obvious internal IPs/localhosts
+        host = urllib.parse.urlparse(url_or_host).hostname if url_or_host.startswith("http") else url_or_host
+        if not host:
+            return False
+
+        if host in ("localhost", "127.0.0.1", "169.254.169.254", "0.0.0.0"):
+            return False
+
+        # Try parsing as IP to check private ranges
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return False
+        except ValueError:
+            pass # Not an IP string
+
+        return True
+    except Exception:
+        return False
+
 def _check_health(target):
+    if not _is_safe_url(target):
+        raise ValueError(f"Target {target} blocked by SSRF protection.")
+
     if target.startswith("http"):
         try:
             import urllib.request
             # Setting a strict timeout so tests don't hang
-            response = urllib.request.urlopen(target, timeout=5)
+            req = urllib.request.Request(target, headers={'User-Agent': 'JARVIS-HealthCheck'})
+            response = urllib.request.urlopen(req, timeout=5)
             if response.getcode() >= 400:
                 raise Exception(f"Healthcheck failed with status code {response.getcode()}")
             return f"{target} is healthy"

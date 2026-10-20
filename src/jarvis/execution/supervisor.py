@@ -1,5 +1,6 @@
 from typing import Dict, Any, TypedDict, Literal
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 
 from jarvis.execution.service import ExecutionService
 from jarvis.tasks import Task, TaskStatus
@@ -82,9 +83,8 @@ class Supervisor:
         workflow.add_edge("complete", END)
         workflow.add_edge("fail", END)
 
-        # Currently keeping SQLite persistence at the task service layer for MVP
-        # Checkpointer would wrap `workflow.compile(checkpointer=MemorySaver())`
-        self.app = workflow.compile()
+        self.checkpointer = MemorySaver()
+        self.app = workflow.compile(checkpointer=self.checkpointer, interrupt_before=["wait_approval"])
 
     def _node_plan(self, state: SupervisorState) -> SupervisorState:
         prompt = f"Plan task: {state['description']}. Available agents: research, developer, operations, communications, qa_security. Reply with agent_id only."
@@ -174,41 +174,16 @@ class Supervisor:
             context=context
         )
 
+        config = {"configurable": {"thread_id": task.task_id}}
+
         # Determine starting node based on current task status (to support resumes)
         if task.status == TaskStatus.QUEUED:
             self.execution_service.transition(task.task_id, TaskStatus.PLANNING)
             # Run graph from start
-            self.app.invoke(initial_state)
+            self.app.invoke(initial_state, config=config)
         elif task.status == TaskStatus.RUNNING:
-            # Resuming an approved action or retrying. We start the graph from the `execute_agent` node directly.
-
-            # Note: We must temporarily update the state for LangGraph to know we are bypassing "plan"
-            initial_state["status"] = "running"
-
-            # Since LangGraph's .invoke() without a checkpointer always starts at START,
-            # and we don't have a checkpointer configured yet, we will just call the graph nodes directly based on the DAG flow.
-            # This is semantically equivalent to a graph step-through for this stateless execution phase.
-            # We must merge partial state dictionaries appropriately.
-
-            current_state = {**initial_state}
-
-            state_update = self._node_execute_agent(current_state)
-            current_state = {**current_state, **state_update}
-
-            if current_state["status"] == "failed":
-                self._node_fail(current_state)
-            elif current_state["status"] == "waiting_for_approval":
-                self._node_wait_approval(current_state)
-            elif current_state["agent_id"] == "qa_security":
-                self._node_complete(current_state)
-            else:
-                state_update = self._node_verify(current_state)
-                current_state = {**current_state, **state_update}
-
-                if current_state["status"] == "failed":
-                    self._node_fail(current_state)
-                else:
-                    self._node_complete(current_state)
-
+            # Resuming an approved action or retrying. Update state with current context before invoking.
+            self.app.update_state(config, {"context": context, "status": "running"})
+            self.app.invoke(None, config=config)
         else:
             raise ValueError(f"Cannot process task in state {task.status.value}")
