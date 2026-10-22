@@ -1,198 +1,244 @@
-import React, { useState, useEffect } from 'react';
-import { Send, CheckCircle, XCircle, Clock, AlertTriangle, Loader2, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Activity, AlertCircle, ArrowDownLeft, ArrowUpRight, Bot, Check, CheckCircle2,
+  ChevronDown, Circle, Clock3, Code2, Command, FileText, History, LoaderCircle,
+  Menu, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, TerminalSquare,
+  XCircle, XOctagon, Zap
+} from 'lucide-react';
+import './styles.css';
 
+type TaskStatus = 'queued' | 'planning' | 'running' | 'verifying' | 'waiting_for_approval' | 'succeeded' | 'failed' | 'cancelled' | string;
 interface Task {
   task_id: string;
   description: string;
-  status: string;
-  result?: string;
-  error?: string;
-  pending_action?: { action: string; target: string };
-  history?: Array<{ pending_action?: { action: string; target: string }; request_id?: string }>;
+  status: TaskStatus;
+  result?: string | null;
+  error?: string | null;
+  history?: Array<{ request_id?: string; pending_action?: { action?: string; target?: string }; [key: string]: unknown }>;
+  assigned_agent_id?: string | null;
+  created_at?: string;
 }
+type View = 'workspace' | 'activity' | 'artifacts';
+
+const terminal = (s: string) => ['succeeded', 'failed', 'cancelled'].includes(s);
+const pretty = (s: string) => (s || 'unknown').replaceAll('_', ' ');
+const timeLabel = (value?: string) => {
+  if (!value) return 'Time not provided by API';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
+};
+const agentNames = ['Research', 'Developer', 'Operations', 'Communications', 'QA / Security'];
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [input, setInput] = useState("");
+  const [selectedId, setSelectedId] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [keyVisible, setKeyVisible] = useState(false);
+  const [search, setSearch] = useState('');
+  const [view, setView] = useState<View>('workspace');
   const [loading, setLoading] = useState(false);
-  const [apiKey, setApiKey] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [mobileSidebar, setMobileSidebar] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState(false);
 
-  const fetchTasks = async () => {
-      // In a real app we'd have a GET /tasks endpoint.
-      // Since MVP API only has GET /tasks/{task_id}, we'll poll existing tasks
-      const resList = await fetch('/api/tasks', { headers: { 'Authorization': apiKey }});
-      if (resList.ok) {
-          const listData = await resList.json();
-          // We map over them and add any client-side history state if we were fetching it individually, but for MVP just showing the list is fine
-          setTasks(listData);
-          return;
-      }
+  const request = useCallback(async (path: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    if (apiKey.trim()) headers.set('Authorization', apiKey.trim());
+    if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    const response = await fetch(`/api${path}`, { ...init, headers });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`API ${response.status}: ${body.slice(0, 220) || response.statusText}`);
+    }
+    if (response.status === 204) return null;
+    return response.json();
+  }, [apiKey]);
 
-      const updatedTasks = await Promise.all(
-          tasks.map(async (t) => {
-              if (t.status === 'succeeded' || t.status === 'failed' || t.status === 'cancelled') return t;
-              try {
-                  const res = await fetch(`/api/tasks/${t.task_id}`, {
-                      headers: { 'Authorization': apiKey }
-                  });
-                  if (res.ok) {
-                      return await res.json();
-                  }
-              } catch (e) {
-                  console.error(e);
-              }
-              return t;
-          })
-      );
-      setTasks(updatedTasks);
-  };
-
-  useEffect(() => {
-      const interval = setInterval(fetchTasks, 2000);
-      return () => clearInterval(interval);
-  }, [tasks, apiKey]);
-
-  const submitTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-
-    setLoading(true);
+  const refreshTasks = useCallback(async (quiet = false) => {
+    if (!quiet) setRefreshing(true);
     try {
-      const res = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
-        body: JSON.stringify({ description: input })
+      const data = await request('/tasks');
+      if (!Array.isArray(data)) throw new Error('The tasks endpoint returned an unexpected response.');
+      const ordered = [...data].sort((a: Task, b: Task) => {
+        const da = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const db = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return db - da;
       });
-      if (res.ok) {
-        const data = await res.json();
-        setTasks([data, ...tasks]);
-        setInput("");
-      } else {
-        alert("Failed to submit task. Check API Key.");
-      }
+      setTasks(ordered);
+      setSelectedId(current => current && ordered.some((t: Task) => t.task_id === current) ? current : ordered[0]?.task_id || '');
+      setError('');
     } catch (e) {
-      console.error(e);
+      setError(e instanceof Error ? e.message : 'Could not load tasks.');
     } finally {
-      setLoading(false);
+      if (!quiet) setRefreshing(false);
     }
+  }, [request]);
+
+  useEffect(() => { void refreshTasks(); }, [refreshTasks]);
+  useEffect(() => {
+    const id = window.setInterval(() => { void refreshTasks(true); }, 3000);
+    return () => window.clearInterval(id);
+  }, [refreshTasks]);
+
+  const selected = tasks.find(task => task.task_id === selectedId) || null;
+  const filtered = useMemo(() => tasks.filter(t => t.description.toLowerCase().includes(search.toLowerCase())), [tasks, search]);
+  const activeCount = tasks.filter(t => !terminal(t.status)).length;
+  const succeededCount = tasks.filter(t => t.status === 'succeeded').length;
+  const approvalEntry = selected?.history?.slice().reverse().find(entry => entry.request_id && entry.pending_action);
+  const pendingAction = approvalEntry?.pending_action;
+
+  const submitTask = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!prompt.trim() || loading) return;
+    setLoading(true); setError(''); setNotice('');
+    try {
+      const task = await request('/tasks', { method: 'POST', body: JSON.stringify({ description: prompt.trim() }) }) as Task;
+      setTasks(current => [task, ...current.filter(t => t.task_id !== task.task_id)]);
+      setSelectedId(task.task_id); setPrompt(''); setView('workspace');
+      setNotice('Task submitted to the JARVIS backend.');
+      void refreshTasks(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Task submission failed.');
+    } finally { setLoading(false); }
   };
 
-  const resolveApproval = async (taskId: string, action: string) => {
-      // Find request_id from history (hack for MVP since GET /tasks doesn't cleanly expose request_id yet)
-      const task = tasks.find(t => t.task_id === taskId);
-      if (!task || !task.history) return;
-      const approvalEntry = [...task.history].reverse().find(e => e.request_id);
-      if (!approvalEntry || !approvalEntry.request_id) return;
-
-      try {
-          await fetch(`/api/approvals/${approvalEntry.request_id}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
-              body: JSON.stringify({ action: action, user_id: 'dashboard_user' })
-          });
-          fetchTasks();
-      } catch (e) {
-          console.error(e);
-      }
+  const cancelTask = async () => {
+    if (!selected) return;
+    try {
+      await request(`/tasks/${encodeURIComponent(selected.task_id)}/cancel`, { method: 'POST' });
+      setNotice('Cancellation request sent.');
+      await refreshTasks(true);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Cancellation failed.'); }
   };
 
-  const cancelTask = async (taskId: string) => {
-      try {
-          await fetch(`/api/tasks/${taskId}/cancel`, {
-              method: 'POST',
-              headers: { 'Authorization': apiKey }
-          });
-          fetchTasks();
-      } catch (e) {
-          console.error(e);
-      }
-  }
-
-  const getStatusIcon = (status: string) => {
-    switch(status) {
-      case 'succeeded': return <CheckCircle className="text-green-500" />;
-      case 'failed': return <XCircle className="text-red-500" />;
-      case 'waiting_for_approval': return <AlertTriangle className="text-yellow-500" />;
-      case 'queued':
-      case 'planning':
-      case 'running':
-      case 'verifying':
-        return <Loader2 className="animate-spin text-blue-500" />;
-      default: return <Clock className="text-gray-500" />;
+  const resolveApproval = async (action: 'approve' | 'reject') => {
+    if (!approvalEntry?.request_id) {
+      setError('The API response does not expose a pending approval request ID for this task.');
+      return;
     }
+    setApprovalBusy(true); setError('');
+    try {
+      await request(`/approvals/${encodeURIComponent(approvalEntry.request_id)}`, {
+        method: 'POST', body: JSON.stringify({ action, user_id: 'dashboard_user' })
+      });
+      setNotice(action === 'approve' ? 'Approval submitted.' : 'Rejection submitted.');
+      await refreshTasks(true);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Approval action failed.'); }
+    finally { setApprovalBusy(false); }
+  };
+
+  const statusIcon = (status: string) => {
+    if (status === 'succeeded') return <CheckCircle2 size={15} />;
+    if (status === 'failed') return <XCircle size={15} />;
+    if (status === 'cancelled') return <XOctagon size={15} />;
+    if (status === 'waiting_for_approval') return <ShieldCheck size={15} />;
+    if (!terminal(status)) return <LoaderCircle size={15} className="spin" />;
+    return <Circle size={15} />;
   };
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: '2rem' }}>
-      <header style={{ borderBottom: '1px solid #ddd', paddingBottom: '1rem', marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ margin: 0 }}>JARVIS OS</h1>
-        <div>
-            <input
-              type="password"
-              placeholder="API Key (if required)"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              style={{ padding: '0.5rem', borderRadius: '4px', border: '1px solid #ccc' }}
-            />
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileSidebar ? 'sidebar-open' : ''}`}>
+        <div className="brand">
+          <div className="brand-mark"><Sparkles size={21} /></div>
+          <div><div className="brand-name">JARVIS<span>OS</span></div><div className="brand-caption">PERSONAL AGENT SYSTEM</div></div>
+          <button className="icon-button sidebar-close" aria-label="Close navigation" onClick={() => setMobileSidebar(false)}><X size={17} /></button>
         </div>
-      </header>
+        <button className="new-task" onClick={() => { setPrompt(''); setView('workspace'); setSelectedId(''); setMobileSidebar(false); }}>
+          <Plus size={17} /> New task <span>⌘ K</span>
+        </button>
+        <div className="side-label">WORKSPACE</div>
+        <button className={`nav-item ${view === 'workspace' ? 'nav-active' : ''}`} onClick={() => setView('workspace')}><Command size={17} /> Command center</button>
+        <button className={`nav-item ${view === 'activity' ? 'nav-active' : ''}`} onClick={() => setView('activity')}><Activity size={17} /> Activity & timeline</button>
+        <button className={`nav-item ${view === 'artifacts' ? 'nav-active' : ''}`} onClick={() => setView('artifacts')}><Code2 size={17} /> Results & artifacts</button>
+        <div className="side-label side-label-row"><span>RECENT TASKS</span><span className="tiny-count">{tasks.length}</span></div>
+        <div className="task-search"><Search size={14} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search task history" aria-label="Search task history" /></div>
+        <div className="history-list">
+          {filtered.map(task => <button key={task.task_id} className={`history-item ${task.task_id === selectedId ? 'history-active' : ''}`} onClick={() => { setSelectedId(task.task_id); setMobileSidebar(false); }}>
+            <span className={`history-status status-${task.status}`}>{statusIcon(task.status)}</span>
+            <span className="history-copy"><span>{task.description}</span><small>{pretty(task.status)}</small></span>
+          </button>)}
+          {filtered.length === 0 && <div className="empty-history">{tasks.length ? 'No tasks match your search.' : 'Your task history will appear here.'}</div>}
+        </div>
+        <div className="sidebar-bottom">
+          <div className="connection-row"><span className="connection-dot" /><span>API connection</span><strong>Polling</strong></div>
+          <div className="sidebar-footnote">Local workspace · API-backed tasks</div>
+        </div>
+      </aside>
 
-      <main>
-        <form onSubmit={submitTask} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask JARVIS to do something..."
-            style={{ flex: 1, padding: '0.75rem', borderRadius: '4px', border: '1px solid #ccc', fontSize: '1rem' }}
-            disabled={loading}
-          />
-          <button type="submit" disabled={loading || !input.trim()} style={{ padding: '0.75rem 1.5rem', background: '#0066cc', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {loading ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}
-            Send
-          </button>
-        </form>
+      <main className="main-area">
+        <header className="topbar">
+          <button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMobileSidebar(true)}><Menu size={19} /></button>
+          <div className="breadcrumb"><span>JARVIS OS</span><ArrowDownLeft size={13} /><strong>{view === 'workspace' ? 'Workspace' : view === 'activity' ? 'Activity' : 'Artifacts'}</strong></div>
+          <div className="topbar-right">
+            <span className="runtime-pill"><span className="connection-dot" /> API connected by polling</span>
+            <div className="api-key-wrap"><input type={keyVisible ? 'text' : 'password'} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API key (optional)" aria-label="JARVIS API key" /><button className="icon-button" onClick={() => setKeyVisible(v => !v)} aria-label={keyVisible ? 'Hide API key' : 'Show API key'}>{keyVisible ? <X size={15}/> : <ChevronDown size={15}/>}</button></div>
+          </div>
+        </header>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {tasks.map(task => (
-            <div key={task.task_id} style={{ background: 'white', padding: '1.5rem', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-                <h3 style={{ margin: 0 }}>{task.description}</h3>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', fontWeight: 600, textTransform: 'uppercase' }}>
-                  {getStatusIcon(task.status)}
-                  {task.status.replace(/_/g, ' ')}
-                  {!['succeeded', 'failed', 'cancelled'].includes(task.status) && (
-                      <button onClick={() => cancelTask(task.task_id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginLeft: '0.5rem', color: '#dc2626' }}>
-                          <X size={16} />
-                      </button>
-                  )}
-                </div>
-              </div>
+        <div className="content-area">
+          <div className="welcome-row">
+            <div><div className="eyebrow"><Zap size={13} /> AGENT COMMAND CENTER</div><h1>{view === 'workspace' ? 'What should we work on?' : view === 'activity' ? 'Execution activity' : 'Results & artifacts'}</h1><p>Delegate a task to JARVIS and track what the backend actually reports.</p></div>
+            <button className="secondary-button" onClick={() => void refreshTasks()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /> Refresh</button>
+          </div>
 
-              {task.status === 'waiting_for_approval' && (
-                  <div style={{ background: '#fef3c7', padding: '1rem', borderRadius: '4px', marginBottom: '1rem' }}>
-                      <strong>Approval Required:</strong> An agent wishes to execute an action.
-                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                          <button onClick={() => resolveApproval(task.task_id, 'approve')} style={{ padding: '0.5rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Approve</button>
-                          <button onClick={() => resolveApproval(task.task_id, 'reject')} style={{ padding: '0.5rem 1rem', background: '#ef4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Reject</button>
-                      </div>
-                  </div>
-              )}
+          <div className="metrics-row">
+            <div className="metric-card"><span className="metric-icon"><Activity size={16}/></span><div><small>ACTIVE TASKS</small><strong>{activeCount.toString().padStart(2, '0')}</strong></div></div>
+            <div className="metric-card"><span className="metric-icon green"><Check size={16}/></span><div><small>SUCCEEDED</small><strong>{succeededCount.toString().padStart(2, '0')}</strong></div></div>
+            <div className="metric-card"><span className="metric-icon violet"><History size={16}/></span><div><small>RECORDED TASKS</small><strong>{tasks.length.toString().padStart(2, '0')}</strong></div></div>
+            <div className="metric-card"><span className="metric-icon amber"><ShieldCheck size={16}/></span><div><small>APPROVALS</small><strong>{tasks.filter(t => t.status === 'waiting_for_approval').length.toString().padStart(2, '0')}</strong></div></div>
+          </div>
 
-              {task.error && (
-                <div style={{ background: '#fee2e2', color: '#991b1b', padding: '1rem', borderRadius: '4px', fontSize: '0.875rem' }}>
-                  <strong>Error:</strong> {task.error}
-                </div>
-              )}
+          {error && <div className="banner banner-error"><AlertCircle size={17}/><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error"><X size={15}/></button></div>}
+          {notice && <div className="banner banner-notice"><CheckCircle2 size={16}/><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Dismiss notice"><X size={15}/></button></div>}
 
-              {task.result && (
-                <div style={{ background: '#f3f4f6', color: '#374151', padding: '1rem', borderRadius: '4px', fontSize: '0.875rem', whiteSpace: 'pre-wrap' }}>
-                  {task.result}
-                </div>
-              )}
-            </div>
-          ))}
-          {tasks.length === 0 && <p style={{ textAlign: 'center', color: '#666' }}>No tasks executed yet.</p>}
+          {view === 'workspace' && <section className="composer-panel">
+            <div className="composer-top"><div className="composer-avatar"><Bot size={20}/></div><div><strong>JARVIS supervisor</strong><span>Task intake · real backend endpoint</span></div><span className="mode-chip">API MODE</span></div>
+            <form onSubmit={submitTask}>
+              <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Describe a task for JARVIS… Be specific about the outcome you need." rows={3} disabled={loading} />
+              <div className="composer-bottom"><span><span className="keyboard-dot"/> Tasks are submitted to POST /tasks</span><button type="submit" className="primary-button" disabled={loading || !prompt.trim()}>{loading ? <LoaderCircle size={16} className="spin"/> : <Send size={16}/>} Run task <ArrowUpRight size={15}/></button></div>
+            </form>
+          </section>}
+
+          {view === 'activity' && <section className="panel activity-panel">
+            <div className="panel-heading"><div><h2>Task status timeline</h2><p>Derived from current task status returned by the API.</p></div><span className="subtle-chip">POLLING · 3S</span></div>
+            {!selected ? <div className="empty-state">Select a task from recent history to inspect its status.</div> : <div className="timeline">
+              <div className="timeline-entry"><span className="timeline-dot"><Check size={13}/></span><div><strong>Task submitted</strong><p>{selected.description}</p><small>Creation time is not exposed by the current task response.</small></div><span className="timeline-state">RECORDED</span></div>
+              <div className="timeline-entry"><span className={`timeline-dot ${terminal(selected.status) ? 'timeline-done' : 'timeline-live'}`}>{statusIcon(selected.status)}</span><div><strong>Current status: {pretty(selected.status)}</strong><p>{selected.error || selected.result || 'The API does not currently expose per-step execution events to the dashboard.'}</p></div><span className="timeline-state">{terminal(selected.status) ? 'FINAL' : 'CURRENT'}</span></div>
+              <div className="capability-note"><AlertCircle size={16}/><div><strong>Detailed agent trace unavailable</strong><p>The backend has no public task-events endpoint in the current API contract. This timeline does not invent agent steps or tool calls.</p></div></div>
+            </div>}
+          </section>}
+
+          {view === 'artifacts' && <section className="panel artifacts-panel">
+            <div className="panel-heading"><div><h2>Deliverables</h2><p>Output returned by the selected task.</p></div><span className="subtle-chip"><FileText size={12}/> API RESULT</span></div>
+            {!selected ? <div className="empty-state">Select a task to view its output.</div> : <>
+              <div className="artifact-title"><FileText size={18}/><div><strong>{selected.description}</strong><small>{selected.task_id}</small></div><span className={`status-badge status-${selected.status}`}>{pretty(selected.status)}</span></div>
+              {selected.result ? <pre className="result-block">{selected.result}</pre> : selected.error ? <pre className="result-block result-error">{selected.error}</pre> : <div className="empty-state">No result has been returned yet.</div>}
+              <div className="capability-note"><Code2 size={16}/><div><strong>Code diff preview not available</strong><p>The API does not currently expose generated file manifests or diffs. This panel shows the actual task result only.</p></div></div>
+            </>}
+          </section>}
+
+          <section className="panel task-panel">
+            <div className="panel-heading"><div><h2>Selected task</h2><p>Live snapshot from the task API</p></div>{selected && <span className={`status-badge status-${selected.status}`}>{statusIcon(selected.status)} {pretty(selected.status)}</span>}</div>
+            {!selected ? <div className="empty-state"><div className="empty-orb"><Sparkles size={23}/></div><strong>No task selected</strong><p>Submit a task above or select one from your history.</p></div> : <>
+              <div className="selected-task-title"><div className="selected-task-icon"><TerminalSquare size={18}/></div><div><h3>{selected.description}</h3><small>ID · {selected.task_id}</small></div></div>
+              {selected.status === 'waiting_for_approval' && <div className="approval-card"><div className="approval-icon"><ShieldCheck size={20}/></div><div className="approval-copy"><strong>Human approval required</strong><p>{pendingAction ? `${pendingAction.action || 'Action'} · ${pendingAction.target || 'target not specified'}` : 'The API reports a pending approval state, but the request details are not present in the task response.'}</p>{!approvalEntry?.request_id && <small>Approval controls unavailable until the API returns a request ID.</small>}</div><div className="approval-actions"><button disabled={approvalBusy || !approvalEntry?.request_id} onClick={() => void resolveApproval('reject')} className="reject-button">Reject</button><button disabled={approvalBusy || !approvalEntry?.request_id} onClick={() => void resolveApproval('approve')} className="approve-button">{approvalBusy ? <LoaderCircle size={14} className="spin"/> : <Check size={14}/>} Approve</button></div></div>}
+              {selected.error && <div className="task-error"><AlertCircle size={16}/><div><strong>Execution error</strong><p>{selected.error}</p></div></div>}
+              <div className="task-actions"><button className="secondary-button" onClick={() => { setView('activity'); }}><Activity size={14}/> View timeline</button><button className="secondary-button" onClick={() => setView('artifacts')}><FileText size={14}/> View result</button>{!terminal(selected.status) && <button className="danger-button" onClick={() => void cancelTask()}><XOctagon size={14}/> Cancel task</button>}</div>
+              {selected.result && <div className="result-preview"><div className="result-preview-heading"><span><CheckCircle2 size={15}/> RESULT</span><button onClick={() => setView('artifacts')}>Open artifacts <ArrowUpRight size={13}/></button></div><pre>{selected.result}</pre></div>}
+            </>}
+          </section>
+
+          <section className="panel specialists-panel">
+            <div className="panel-heading"><div><h2>Specialist agents</h2><p>Configured roles in the supervisor architecture</p></div><span className="subtle-chip">5 ROLES</span></div>
+            <div className="specialist-grid">{agentNames.map((name, i) => <div className="specialist-card" key={name}><div className={`specialist-symbol specialist-${i}`}>{i === 0 ? <Search size={16}/> : i === 1 ? <Code2 size={16}/> : i === 2 ? <Zap size={16}/> : i === 3 ? <FileText size={16}/> : <ShieldCheck size={16}/>}</div><div><strong>{name}</strong><small>{['Research and synthesis','Code and development','Operations and deployment','Communication workflows','Quality and safety'][i]}</small></div><span className="configured-dot" title="Configured role; live per-agent status is not exposed"/></div>)}</div>
+            <div className="capability-note"><AlertCircle size={16}/><div><strong>Live per-agent activity is not exposed</strong><p>These are the five roles configured in the backend source, not a claim that each role is currently running. The current API returns task-level status only.</p></div></div>
+          </section>
+
+          <footer className="main-footer"><span><span className="connection-dot"/> JARVIS API · local development</span><span>Live updates via polling <span className="footer-separator">/</span> No fabricated telemetry</span></footer>
         </div>
       </main>
     </div>
