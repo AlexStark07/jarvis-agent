@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Activity, AlertCircle, ArrowDownLeft, ArrowUpRight, Bot, Check, CheckCircle2,
-  ChevronDown, Circle, Clock3, Code2, Command, FileText, History, LoaderCircle,
+  ChevronDown, Circle, Code2, Command, FileText, History, LoaderCircle,
   Menu, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, TerminalSquare,
   XCircle, XOctagon, Zap
 } from 'lucide-react';
@@ -22,11 +22,6 @@ type View = 'workspace' | 'activity' | 'artifacts';
 
 const terminal = (s: string) => ['succeeded', 'failed', 'cancelled'].includes(s);
 const pretty = (s: string) => (s || 'unknown').replaceAll('_', ' ');
-const timeLabel = (value?: string) => {
-  if (!value) return 'Time not provided by API';
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
-};
 const agentNames = ['Research', 'Developer', 'Operations', 'Communications', 'QA / Security'];
 
 export default function App() {
@@ -90,7 +85,7 @@ export default function App() {
   const approvalEntry = selected?.history?.slice().reverse().find(entry => entry.request_id && entry.pending_action);
   const pendingAction = approvalEntry?.pending_action;
 
-  const submitTask = async (event: React.FormEvent<HTMLFormElement>) => {
+  const submitTask = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!prompt.trim() || loading) return;
     setLoading(true); setError(''); setNotice('');
