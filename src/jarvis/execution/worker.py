@@ -18,6 +18,7 @@ class DurableWorker:
         self._thread = None
         self._active_tasks = set()
         self._lock = threading.Lock()
+        self._task_threads = []
 
     def start(self):
         if self._thread is not None:
@@ -31,6 +32,15 @@ class DurableWorker:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=5.0)
+
+        # Wait for all active task threads to finish up cleanly so db files aren't locked
+        with self._lock:
+            threads_to_join = list(self._task_threads)
+
+        for t in threads_to_join:
+            if t.is_alive():
+                t.join(timeout=2.0)
+
         logger.info(f"DurableWorker {self.worker_id} stopped.")
 
     def _run_loop(self):
@@ -55,7 +65,10 @@ class DurableWorker:
                     if repo.claim_task(task.task_id, self.worker_id, lease_duration=60):
                         with self._lock:
                             self._active_tasks.add(task.task_id)
-                        threading.Thread(target=self._process_wrapper, args=(task.task_id,), daemon=True).start()
+                        t = threading.Thread(target=self._process_wrapper, args=(task.task_id,), daemon=True)
+                        with self._lock:
+                            self._task_threads.append(t)
+                        t.start()
 
             except Exception as e:
                 logger.error(f"Error in DurableWorker loop: {e}")
