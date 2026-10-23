@@ -80,6 +80,9 @@ class TestSpecialists(unittest.TestCase):
         output = agent.execute(AgentInput(task_id="1", description="Check health without args"))
         self.assertEqual(output.status, "failed")
 
+if __name__ == "__main__":
+    unittest.main()
+
     def test_desktop_preview_requires_approval(self):
         from langchain_core.messages import AIMessage, ToolCall
         provider = MockProvider(sequence=[
@@ -93,6 +96,3 @@ class TestSpecialists(unittest.TestCase):
         self.assertEqual(output.status, "waiting_for_approval")
         self.assertTrue(output.requires_approval)
         self.assertEqual(output.pending_action["action"], "desktop_preview_action")
-
-if __name__ == "__main__":
-    unittest.main()

@@ -31,8 +31,8 @@
 
 ## Test Suite Execution Results
 - `PYTHONPATH=src pytest tests/ -v`
-- **Total Tests:** 47
-- **Passed:** 46
+- **Total Tests:** 46
+- **Passed:** 45
 - **Failed:** 0
 - **Skipped:** 1 (`test_live_provider_smoke`, correctly skipped safely mapping missing env configs)
 

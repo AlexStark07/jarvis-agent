@@ -65,10 +65,7 @@ class ApprovalAction(BaseModel):
 
 @app.get("/health")
 def health_check():
-    return {
-        "status": "ok",
-        "docker_enabled": worker_manager.use_docker if worker_manager else False
-    }
+    return {"status": "ok", "docker_enabled": worker_manager.use_docker}
 
 @app.get("/tasks", response_model=List[TaskResponse])
 def get_all_tasks(api_key: str = Depends(get_api_key)):
