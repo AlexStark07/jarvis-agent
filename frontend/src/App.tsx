@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import {
   Activity, AlertCircle, ArrowDownLeft, ArrowUpRight, Bot, Check, CheckCircle2,
   ChevronDown, Circle, Code2, Command, FileText, History, LoaderCircle,
-  Menu, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, TerminalSquare,
+  Menu, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, TerminalSquare, X,
   XCircle, XOctagon, Zap
 } from 'lucide-react';
 import './styles.css';
@@ -21,7 +21,7 @@ interface Task {
 type View = 'workspace' | 'activity' | 'artifacts';
 
 const terminal = (s: string) => ['succeeded', 'failed', 'cancelled'].includes(s);
-const pretty = (s: string) => (s || 'unknown').replaceAll('_', ' ');
+const pretty = (s: string) => (s || 'unknown').replace(/_/g, ' ');
 const agentNames = ['Research', 'Developer', 'Operations', 'Communications', 'QA / Security'];
 
 export default function App() {
